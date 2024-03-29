@@ -1,6 +1,6 @@
 # Gitops App and Manifest Example
 
-This is a working example of an applicaiton repo and a manifest repo working in tandem as one CI unit.
+This is a working example of an application repo and a manifest repo working in tandem as one CI unit.
 
 The order of events is as follows.
 
