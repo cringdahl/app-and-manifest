@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: example-app
+  namespace: argocd
+spec:
+  description: the project for the demo application
+  sourceRepos: # need to get this secret created
+  - https://github.com/ORGNAME/example-app-manifest
+  destinations:
+  - name: '*'
+    namespace: '*'
+    server: '*'
+  clusterResourceWhitelist:
+  - group: '*'
+    kind: '*'
+  namespaceResourceWhitelist:
+  - group: '*'
+    kind: '*'

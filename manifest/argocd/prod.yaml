@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: example-app
+  namespace: argocd
+spec:
+  source:
+    path: kustomize/overlay/prod
+    # repo needs to be fully created and authed before set is kubectl apply
+    repoURL: https://github.com/ORGNAME/example-app-manifest
+    targetRevision: main
+  project: example-app
+  destination:
+    name: target
+    namespace: example-app-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

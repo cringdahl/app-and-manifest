@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: example-app-dev
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+  - pullRequest:
+      requeueAfterSeconds: 180
+      github:
+        owner: ORGNAME
+        repo: manifest
+        tokenRef:
+          # argocd repos are secrets with user/pass
+          # password is the token
+          # we only know secretname after creating the repo in argocd
+          secretName: repo-1447391362
+          key: password
+  template:
+    metadata:
+      name: 'example-app-{{.branch}}'
+    spec:
+      source:
+        path: kustomize/overlay/dev
+        # repo needs to be fully created and authed in argocd before set is kubectl apply
+        repoURL: https://github.com/ORGNAME/example-app-manifest
+        targetRevision: '{{.head_sha}}'
+      project: example-app
+      destination:
+        name: target # this is the name of the app cluster, separate from the argocd cluster
+        namespace: 'example-app-{{.branch}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

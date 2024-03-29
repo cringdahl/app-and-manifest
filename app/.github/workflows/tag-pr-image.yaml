@@ -1,0 +1,102 @@
+name: Add version to PR-based tested image
+
+on:
+  push:
+    tags:
+    - '[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  tag_upstream:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout source code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Exit if on main branch
+      if: endsWith(github.ref, 'main') == true
+      run: |
+        echo "Please only tag on PR-based branches."
+        exit -1
+
+    - name: Get short SHA of commit for image tagging
+      id: sha7
+      run: echo "sha7=$(echo ${GITHUB_SHA} | cut -c1-7)" >> $GITHUB_OUTPUT
+
+    - name: Get PR number
+    # this uses github cli to list the PR [gh pr]
+    #   associated with the head branch name (minus any prefix) [git name-rev]
+    #     associated with the commit [git log]
+    #       associated with the tag that was pushed to run this workflow
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      id: pr
+      run: echo "number=$(gh pr list -H $(git name-rev --name-only --exclude=tags/* $(git log --format=format:%H -n1) | sed "s/.*\///") -q ".[].number" --json number)" >> $GITHUB_OUTPUT
+
+    - name: Extract metadata (tags, labels) for Docker
+      # because this is happening on a tag event, the label will be the pushed tag
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        # images: |
+        #   ghcr.io/${{ github.repository_owner }}/gitops-and-actions
+        flavor: |
+          latest=false
+
+    - uses: imjasonh/setup-crane@v0.3
+    - name: Tag remote image
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "${GH_TOKEN}" | crane auth login ghcr.io --username my-username --password-stdin
+        crane tag \
+          ghcr.io/${{ github.repository_owner }}/gitops-and-actions:pr-${{ steps.pr.outputs.number }}-${{ steps.sha7.outputs.sha7 }} \
+          ${{ steps.meta.outputs.tags }}
+
+    - name: Write tag info to PR comment
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const output = `# Image Tagging Results
+          image: ghcr.io/${{ github.repository_owner }}/gitops-and-actions:${{ steps.meta.outputs.tags }}
+          author: ${{ github.actor }}
+          short sha: ${{ steps.sha7.outputs.sha7 }}`;
+
+          github.rest.issues.createComment({
+            issue_number: ${{ steps.pr.outputs.number }},
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          })
+    - name: Get email associated with Github username
+      uses: actions/github-script@v7
+      id: get-email
+      with: 
+        github-token: ${{ github.token }}
+        script: |
+          return (await github.rest.users.getByUsername({
+            username: ${{ tojson(github.actor) }}
+          })).data.email;
+        result-encoding: string
+    - name: Trigger tag update in manifests repository
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.MANIFEST_PAT }} # Secret auths to manifest repo
+        script: |
+          await github.rest.actions.createWorkflowDispatch({
+            owner: '${{ github.repository_owner }}',
+            repo: 'manifest',
+            workflow_id: 'update-container-image.yaml',
+            ref: 'main',
+            inputs: {
+              actor: '${{ github.actor }}  <${{ steps.get-email.outputs.result }}>',
+              head_pr: '${{ steps.pr.outputs.number }}',
+              message: 'Updating image tag to: ghcr.io/${{ github.repository_owner }}/gitops-and-actions:${{ steps.meta.outputs.tags }}',
+              env_target: 'prod',
+              image: 'ghcr.io/${{ github.repository_owner }}/gitops-and-actions:${{ steps.meta.outputs.tags }}',
+              version: '${{ steps.meta.outputs.tags }}'
+            }
+          })

@@ -1,0 +1,3 @@
+- op: replace
+  path: /spec/rules/0/host
+  value: example-app-pr-30.example.10-22-37-95.sslip.io

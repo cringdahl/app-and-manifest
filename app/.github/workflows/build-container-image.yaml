@@ -1,0 +1,120 @@
+name: Build Container Image
+
+on:
+  pull_request:
+    types: [ opened, synchronize ]
+    branches: [ main ]
+    paths: ['**.js', '**.json' , 'public/**', 'views/**', 'Dockerfile']    
+
+concurrency:
+  group: container-build
+
+jobs:
+  build-container:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+    - name: Checkout source code
+      uses: actions/checkout@v4
+
+    - name: Get short SHA of commit for image tagging
+      id: sha7
+      run: echo "sha7=$(echo ${{ github.event.pull_request.head.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+
+    - name: Use Node.js 18.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18.x'
+    
+    - run: npm ci
+    - run: npm run build --if-present
+    - run: npm test
+
+    - name: Login to ghcr.io
+      uses: docker/login-action@v3
+      with:
+        username: USERNAME
+        password: ${{ secrets.GITHUB_TOKEN }}
+        registry: ghcr.io
+
+    - name: Extract metadata (tags, labels) for Docker
+      # because this is happening on a PR event, the label will be pr-##
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          ghcr.io/${{ github.repository_owner }}/gitops-and-actions
+        tags: |
+          type=ref,suffix=-${{ steps.sha7.outputs.sha7 }},event=pr
+        flavor: |
+          latest=false
+
+    - run: |
+        echo "${{ steps.meta.outputs.tags }}"
+
+    # Build the container image
+    - name: Build and push images to ghcr.io
+      uses: docker/build-push-action@v5
+      with:
+        context: ./
+        file: Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+  
+  create-pr:
+    runs-on: ubuntu-latest
+    needs: [build-container]
+    steps:
+    - name: Determine target environment based on event type
+      id: env
+      run: |
+        ACTION=${{ github.event_name }}
+        echo "target=$( [[ $ACTION == 'push' ]] && echo prod || echo dev )" >> $GITHUB_OUTPUT
+    - name: Get email associated with Github username
+      uses: actions/github-script@v7
+      id: get-email
+      with: 
+        github-token: ${{ github.token }}
+        script: |
+          return (await github.rest.users.getByUsername({
+            username: ${{ tojson(github.actor) }}
+          })).data.email;
+        result-encoding: string
+
+    # https://github.com/orgs/community/discussions/26323#discussioncomment-3251454
+    # Use the GitHub API to make an authenticated call that triggers a workflow
+    # in the manifests repository. The targeted workflow opens a PR to use the
+    # new image that was pushed to ghcr.io. A personal access token (MANIFEST_PAT) is
+    # required to make the API call. The MANIFEST_PAT can be created by a by visiting
+    # https://github.com/settings/personal-access-tokens/new, selecting the manifest
+    # repository, and then adding actions read/write permissions to the MANIFEST_PAT
+    # 
+    # Set the MANIFEST_PAT at https://github.com/USERNAME/THIS_REPO/settings/secrets/actions
+    # 
+    # You can manually trigger the action using curl
+    # curl -X POST \
+    # -H "Authorization: Bearer $MANIFEST_PAT" \
+    # -H "Accept: application/vnd.github.v3+json" \
+    # https://api.github.com/repos/ORG_OR_USER/MANIFEST_REPO/actions/workflows/update-backend-image.yaml/dispatches \
+    # -d '{"ref":"main", "inputs": { "image": "foo" } }'
+    - name: Trigger update workflow in the manifests repository
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.MANIFEST_PAT }} # Secret auths to manifest repo
+        script: |
+          await github.rest.actions.createWorkflowDispatch({
+            owner: '${{ github.repository_owner }}',
+            repo: 'manifest',
+            workflow_id: 'update-container-image.yaml',
+            ref: 'main',
+            inputs: {
+              actor: '${{ github.actor }}  <${{ steps.get-email.outputs.result }}>',
+              head_pr: '${{ github.event.number }}',
+              message: 'Merging \'${{ github.head_ref }}\' into \'${{ github.base_ref }}\': ${{ github.event.pull_request.title }}',
+              env_target: '${{ steps.env.outputs.target }}',
+              image: 'ghcr.io/${{ github.repository_owner }}/gitops-and-actions:${{ needs.build-container.outputs.version }}',
+              version: '${{ needs.build-container.outputs.version }}'
+            }
+          })

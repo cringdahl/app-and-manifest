@@ -1,0 +1,21 @@
+namespace: example-app-prod
+resources:
+- ./../../base
+images:
+- name: app-image
+  newName: ghcr.io/ORGNAME/gitops-and-actions
+  newTag: 2.5.0
+commonLabels:
+  app.kubernetes.io/instance: example-app-prod
+patchesJson6902:
+- patch: |-
+    - op: replace
+      path: /spec/template/spec/imagePullSecrets/0/name
+      value: example-app-ghcrcred
+  target:
+    group: apps
+    kind: Deployment
+    name: deployment
+    version: v1
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization

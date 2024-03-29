@@ -1,0 +1,40 @@
+name: Close Manifest Pull Request
+
+on:
+  workflow_dispatch:
+    inputs:
+      actor:
+        type: string
+        required: true
+        description: Username that created application repo PR
+      head_pr:
+        type: string
+        required: true
+        description: The number of the triggering application repo PR
+      merged:
+        type: boolean
+        required: true
+        description: True if closure is also a merge
+
+jobs:
+  close-pr:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the source code in the repository
+      - uses: actions/checkout@v4
+    
+      - name: Set BRANCH as manifest branch name (ie, pr-25 )
+        run: echo "BRANCH=pr-${{ github.event.inputs.head_pr }}" >> $GITHUB_ENV
+  
+      - name: Close PR without merge
+        if: github.event.inputs.merged == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr close ${{ env.BRANCH }} --comment "Closing with no merge due to lack of application PR merge"
+
+      - name: Close PR with merge
+        if: github.event.inputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr merge ${{ env.BRANCH }} --auto --delete-branch --squash

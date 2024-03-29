@@ -1,0 +1,89 @@
+name: Update Manifest with Container Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      appname:
+        type: string
+        required: false
+        default: example-app
+        description: short name of application, no spaces
+      actor:
+        type: string
+        required: true
+        description: Username that created application repo PR
+      head_pr:
+        type: string
+        required: true
+        description: The number of the triggering application repo PR
+      message:
+        type: string
+        required: true
+        description: A message describing why this workflow is being invoked
+      version:
+        type: string
+        required: true
+        description: The version of the image
+      image:
+        type: string
+        required: true
+        description: The new image, e.g ghcr.io/org_name/image_name:pre-1.1.1
+      env_target:
+        type: string
+        required: true
+        description: The overlay target, ie dev or prod
+jobs:
+  update-image-tag:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout the source code in the repository
+    - uses: actions/checkout@v4
+
+    - name: Print new image value
+      run: echo "New image is ${{ github.event.inputs.image }}"
+
+    - name: Set DASH_VERSION/_PR/_NAMESPACE
+      run: |
+        VERSION=${{ github.event.inputs.version }}
+        DASH_VERSION=${VERSION//./-}
+        DASH_PR=pr-${{ github.event.inputs.head_pr }}
+        echo "DASH_VERSION=${DASH_VERSION}" >> $GITHUB_ENV
+        echo "DASH_PR=${DASH_PR}" >> $GITHUB_ENV
+        echo "DASH_NAMESPACE=${{ github.event.inputs.appname }}-${DASH_PR}" >> $GITHUB_ENV
+
+    - name: Update image tag in prod overlay
+      if: ${{ github.event.inputs.env_target == 'prod' }}
+      working-directory: kustomize/overlay/prod
+      run: |
+        kustomize edit set image app-image=${{ github.event.inputs.image }}
+        kustomize edit set namespace ${{ github.event.inputs.appname }}-${{ github.event.inputs.env_target }}
+        kustomize edit set label app.kubernetes.io/instance:${{ github.event.inputs.appname }}-${{ github.event.inputs.env_target }}
+
+    - name: Update pre-prod configuration
+      if: ${{ github.event.inputs.env_target != 'prod' }}
+      working-directory: kustomize/overlay/${{ github.event.inputs.env_target }}
+      # always update pre-prod with currently versioned app image
+      run: |
+        kustomize edit set image app-image=${{ github.event.inputs.image }}
+        kustomize edit set namespace ${{ env.DASH_NAMESPACE }}
+        kustomize edit set label app.kubernetes.io/instance:${{ github.event.inputs.appname }}-${{ github.event.inputs.version }}
+        kustomize edit set namesuffix -- -${{ env.DASH_VERSION }}
+        DOMAIN=${{ env.DASH_NAMESPACE }}.$(yq .spec.rules.0.host ../../base/ingress.yaml) \
+          yq e '.0.value = strenv(DOMAIN)' -i ingress-patch.yaml || true
+    # Create a PR with the new values files. This requires actions to
+    # be allowed to open a PR in the repository:
+    # https://github.com/marketplace/actions/create-pull-request#workflow-permissions
+    - name: Create or Update Pull Request
+      uses: gr2m/create-or-update-pull-request-action@v1
+      id: cupr
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      with:
+        title: ${{github.event.inputs.message}}
+        author: '${{ inputs.actor }}'
+        body: |
+          App image: ${{ github.event.inputs.image }}
+          Env target: ${{ github.event.inputs.env_target }}
+        branch: ${{ env.DASH_PR }}
+        commit-message: update backend image tag to ${{github.event.inputs.version}}
