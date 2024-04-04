@@ -18,6 +18,8 @@ spec:
           # we only know secretname after creating the repo in argocd
           secretName: repo-1447391362
           key: password
+        labels:
+        - application-automation
   template:
     metadata:
       name: 'example-app-{{.branch}}'

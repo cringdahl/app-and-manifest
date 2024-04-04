@@ -87,3 +87,4 @@ jobs:
           Env target: ${{ github.event.inputs.env_target }}
         branch: ${{ env.DASH_PR }}
         commit-message: update backend image tag to ${{github.event.inputs.version}}
+        labels: application-automation
